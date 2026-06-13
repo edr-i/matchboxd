@@ -52,6 +52,7 @@ app.add_middleware(
 DATA_PATH       = os.environ.get("RATINGS_CSV",   "data/ratings.csv")
 MOVIE_DATA_PATH = os.environ.get("MOVIE_DATA_CSV", "data/movie_data.csv")
 TMDB_KEY        = os.environ.get("TMDB_KEY", "")
+TMDB_BASE       = "https://api.themoviedb.org/3"
 if not TMDB_KEY:
     print("⚠  TMDB_KEY not set — recent film metadata will be limited")
 COMMUNITY_CACHE = ".cache_community.pkl"
@@ -138,6 +139,55 @@ def index():
 def lb_logo_long():
     return FileResponse(os.path.join(os.path.dirname(__file__), "letterboxd_logo_long.svg"),
                         media_type="image/svg+xml")
+
+
+@app.get("/providers/{slug}")
+def get_providers(slug: str, country: str = "US"):
+    if not TMDB_KEY:
+        return {"country": country, "flatrate": [], "rent": [], "buy": []}
+
+    meta_df = get_meta_df()
+    tmdb_id = None
+    if meta_df is not None:
+        row = meta_df[meta_df["movie_id"] == slug]
+        if not row.empty and "tmdb_id" in meta_df.columns:
+            v = row.iloc[0].get("tmdb_id")
+            if v and not pd.isna(v):
+                tmdb_id = str(int(float(v)))
+
+    if not tmdb_id:
+        from letterboxd_recommender import _tmdb_fetch_one
+        fetched = _tmdb_fetch_one(slug, TMDB_KEY)
+        if fetched:
+            tmdb_id = str(fetched.get("tmdb_id", ""))
+
+    if not tmdb_id:
+        return {"country": country, "flatrate": [], "rent": [], "buy": []}
+
+    try:
+        r = requests.get(
+            f"{TMDB_BASE}/movie/{tmdb_id}/watch/providers",
+            params={"api_key": TMDB_KEY},
+            timeout=8,
+        )
+        r.raise_for_status()
+        country_data = r.json().get("results", {}).get(country.upper(), {})
+
+        def parse(entries):
+            return [
+                {"name": e["provider_name"],
+                 "logo": f"https://image.tmdb.org/t/p/original{e['logo_path']}"}
+                for e in (entries or []) if e.get("logo_path")
+            ]
+
+        return {
+            "country":  country.upper(),
+            "flatrate": parse(country_data.get("flatrate")),
+            "rent":     parse(country_data.get("rent")),
+            "buy":      parse(country_data.get("buy")),
+        }
+    except Exception:
+        return {"country": country, "flatrate": [], "rent": [], "buy": []}
 
 
 _PROXY_ALLOWED_HOSTS = {"a.ltrbxd.com", "image.tmdb.org"}

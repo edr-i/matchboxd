@@ -286,6 +286,23 @@
       font-size: 0.88rem; line-height: 1.65; color: #333;
       margin-top: 0.6rem;
     }
+    .card-detail-providers {
+      margin-top: 0.75rem;
+      display: flex; flex-direction: column; gap: 0.3rem;
+    }
+    .card-detail-providers-label {
+      font-family: 'Space Mono', monospace;
+      font-size: 0.5rem; text-transform: uppercase;
+      letter-spacing: 0.08em; color: #888;
+    }
+    .card-detail-providers-row {
+      display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center;
+    }
+    .provider-logo {
+      width: 30px; height: 30px;
+      border-radius: 6px; border: 1px solid #ddd;
+      object-fit: cover;
+    }
     .card-detail-lb {
       display: inline-block; margin-top: 0.8rem;
       opacity: 0.65; transition: opacity 0.15s;
@@ -851,6 +868,9 @@
       </div>
       ${genres ? `<div class="card-detail-genres">${genres}</div>` : ''}
       <p class="card-detail-overview">${film.overview || 'No overview available.'}</p>
+      <div class="card-detail-providers">
+        <span class="card-detail-providers-label" style="color:#bbb">Loading availability…</span>
+      </div>
       <a href="${lbUrl}" target="_blank" rel="noopener noreferrer" class="card-detail-lb">
         <img src="/letterboxd_logo_long.svg" alt="View on Letterboxd">
       </a>`;
@@ -858,6 +878,36 @@
     lastInRow.insertAdjacentElement('afterend', detail);
     _detailSlug = slug;
     _detailEl   = detail;
+
+    // Async: fetch streaming providers
+    const provDiv = detail.querySelector('.card-detail-providers');
+    const country = ((navigator.language || 'en-US').split('-')[1] || 'US').toUpperCase();
+    fetch(`/providers/${encodeURIComponent(slug)}?country=${country}`)
+      .then(r => r.json())
+      .then(d => {
+        if (!_detailEl || !_detailEl.contains(provDiv)) return;
+        const flat = d.flatrate || [];
+        const rent = d.rent || [];
+        if (!flat.length && !rent.length) {
+          provDiv.innerHTML = '<span class="card-detail-providers-label" style="color:#bbb">Not available to stream</span>';
+          return;
+        }
+        let html = '';
+        if (flat.length) {
+          html += `<div class="card-detail-providers-label">Stream</div>
+            <div class="card-detail-providers-row">
+              ${flat.map(p => `<img class="provider-logo" src="${p.logo}" title="${p.name}" alt="${p.name}">`).join('')}
+            </div>`;
+        }
+        if (rent.length) {
+          html += `<div class="card-detail-providers-label" style="margin-top:0.3rem">Rent / Buy</div>
+            <div class="card-detail-providers-row">
+              ${rent.map(p => `<img class="provider-logo" src="${p.logo}" title="${p.name}" alt="${p.name}">`).join('')}
+            </div>`;
+        }
+        provDiv.innerHTML = html;
+      })
+      .catch(() => { if (provDiv && _detailEl && _detailEl.contains(provDiv)) provDiv.innerHTML = ''; });
   }
 
   const PROG_MAP = [
