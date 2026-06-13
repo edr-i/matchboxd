@@ -1,0 +1,9 @@
+letterboxdpy
+scikit-surprise
+scikit-learn
+pandas
+numpy
+requests
+fastapi
+uvicorn[standard]
+python-dotenv
