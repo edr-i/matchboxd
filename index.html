@@ -184,11 +184,11 @@
     }
 
     /* ── DECADE FILTER ── */
-    #decade-filter, #genre-filter {
+    #decade-filter, #genre-filter, #runtime-filter {
       display: none; align-items: center; gap: 0.75rem;
       flex-wrap: wrap; margin-bottom: 1rem; width: 100%;
     }
-    #decade-filter.visible, #genre-filter.visible { display: flex; }
+    #decade-filter.visible, #genre-filter.visible, #runtime-filter.visible { display: flex; }
     .filter-label {
       font-family: 'Space Mono', monospace;
       font-size: 0.6rem; text-transform: uppercase;
@@ -303,6 +303,9 @@
       border-radius: 6px; border: 1px solid #ddd;
       object-fit: cover;
     }
+    .card-detail-trailer { display: inline-block; margin-top: 0.6rem; margin-right: 0.75rem; opacity: 0.65; transition: opacity 0.15s; }
+    .card-detail-trailer:hover { opacity: 1; }
+    .card-detail-trailer img { height: 18px; width: auto; display: block; }
     .card-detail-lb {
       display: inline-block; margin-top: 0.8rem;
       opacity: 0.65; transition: opacity 0.15s;
@@ -690,6 +693,11 @@
     <div class="decade-btns" id="genre-btns"></div>
   </div>
 
+  <div id="runtime-filter">
+    <span class="filter-label">Runtime</span>
+    <div class="decade-btns" id="runtime-btns"></div>
+  </div>
+
   <div id="results"></div>
 
   <footer>
@@ -704,8 +712,16 @@
 
 <script>
   const API = "";
-  let activeDecades = new Set();
-  let activeGenres  = new Set();
+  let activeDecades  = new Set();
+  let activeGenres   = new Set();
+  let activeRuntimes = new Set();
+
+  const RUNTIME_BUCKETS = [
+    { label: "< 90m",    min: 0,   max: 89  },
+    { label: "90–120m",  min: 90,  max: 120 },
+    { label: "120–150m", min: 121, max: 150 },
+    { label: "150m+",    min: 151, max: Infinity },
+  ];
 
   const EXPLAINERS = {
     hybrid:  "Hybrid combines community taste patterns with your film preferences. Best results for most users.",
@@ -804,13 +820,48 @@
     document.getElementById("genre-filter").classList.add("visible");
   }
 
+  function buildRuntimeFilter(films) {
+    const hasRuntime = films.some(f => f.runtime > 0);
+    if (!hasRuntime) return;
+    const container = document.getElementById("runtime-btns");
+    container.innerHTML = "";
+    activeRuntimes = new Set();
+    RUNTIME_BUCKETS.forEach(b => {
+      const count = films.filter(f => f.runtime > 0 && f.runtime >= b.min && f.runtime <= b.max).length;
+      if (!count) return;
+      const btn = document.createElement("button");
+      btn.className = "decade-btn";
+      btn.textContent = b.label;
+      btn.dataset.bucket = b.label;
+      btn.onclick = () => {
+        if (activeRuntimes.has(b.label)) {
+          activeRuntimes.delete(b.label);
+          btn.classList.remove("active");
+        } else {
+          activeRuntimes.add(b.label);
+          btn.classList.add("active");
+        }
+        applyFilters();
+      };
+      container.appendChild(btn);
+    });
+    document.getElementById("runtime-filter").classList.add("visible");
+  }
+
   function applyFilters() {
     document.querySelectorAll(".card[data-year]").forEach(card => {
       const decade     = Math.floor(parseInt(card.dataset.year) / 10) * 10;
       const cardGenres = card.dataset.genres ? card.dataset.genres.split(",") : [];
-      const passDecade = activeDecades.size === 0 || activeDecades.has(decade);
-      const passGenre  = activeGenres.size === 0 || cardGenres.some(g => activeGenres.has(g));
-      card.classList.toggle("filtered", !passDecade || !passGenre);
+      const runtime    = parseInt(card.dataset.runtime) || 0;
+      const passDecade  = activeDecades.size === 0 || activeDecades.has(decade);
+      const passGenre   = activeGenres.size === 0 || cardGenres.some(g => activeGenres.has(g));
+      const passRuntime = activeRuntimes.size === 0 || (runtime > 0 && [...activeRuntimes].some(label => {
+        const b = RUNTIME_BUCKETS.find(x => x.label === label);
+        return b && runtime >= b.min && runtime <= b.max;
+      }));
+      const filtered = !passDecade || !passGenre || !passRuntime;
+      card.classList.toggle("filtered", filtered);
+      if (filtered && card.dataset.slug === _detailSlug) closeDetail();
 
       const label = card.querySelector(".card-label");
       if (label) {
@@ -882,7 +933,7 @@
     // Async: fetch streaming providers
     const provDiv = detail.querySelector('.card-detail-providers');
     const country = ((navigator.language || 'en-US').split('-')[1] || 'US').toUpperCase();
-    fetch(`/providers/${encodeURIComponent(slug)}?country=${country}`)
+    fetch(`${API}/providers/${encodeURIComponent(slug)}?country=${country}`)
       .then(r => r.json())
       .then(d => {
         if (!_detailEl || !_detailEl.contains(provDiv)) return;
@@ -890,22 +941,31 @@
         const rent = d.rent || [];
         if (!flat.length && !rent.length) {
           provDiv.innerHTML = '<span class="card-detail-providers-label" style="color:#bbb">Not available to stream</span>';
-          return;
+        } else {
+          let html = '';
+          if (flat.length) {
+            html += `<div class="card-detail-providers-label">Stream</div>
+              <div class="card-detail-providers-row">
+                ${flat.map(p => `<img class="provider-logo" src="${p.logo}" title="${p.name}" alt="${p.name}">`).join('')}
+              </div>`;
+          }
+          if (rent.length) {
+            html += `<div class="card-detail-providers-label" style="margin-top:0.3rem">Rent / Buy</div>
+              <div class="card-detail-providers-row">
+                ${rent.map(p => `<img class="provider-logo" src="${p.logo}" title="${p.name}" alt="${p.name}">`).join('')}
+              </div>`;
+          }
+          provDiv.innerHTML = html;
         }
-        let html = '';
-        if (flat.length) {
-          html += `<div class="card-detail-providers-label">Stream</div>
-            <div class="card-detail-providers-row">
-              ${flat.map(p => `<img class="provider-logo" src="${p.logo}" title="${p.name}" alt="${p.name}">`).join('')}
-            </div>`;
+        if (d.trailer_url) {
+          const a = document.createElement('a');
+          a.className = 'card-detail-trailer';
+          a.href = d.trailer_url;
+          a.target = '_blank';
+          a.rel = 'noopener noreferrer';
+          a.innerHTML = '<img src="/youtube_logo_long.png" alt="Watch trailer on YouTube">';
+          detail.querySelector('.card-detail-lb').insertAdjacentElement('beforebegin', a);
         }
-        if (rent.length) {
-          html += `<div class="card-detail-providers-label" style="margin-top:0.3rem">Rent / Buy</div>
-            <div class="card-detail-providers-row">
-              ${rent.map(p => `<img class="provider-logo" src="${p.logo}" title="${p.name}" alt="${p.name}">`).join('')}
-            </div>`;
-        }
-        provDiv.innerHTML = html;
       })
       .catch(() => { if (provDiv && _detailEl && _detailEl.contains(provDiv)) provDiv.innerHTML = ''; });
   }
@@ -953,6 +1013,7 @@
     document.getElementById("results").innerHTML = "";
     document.getElementById("decade-filter").classList.remove("visible");
     document.getElementById("genre-filter").classList.remove("visible");
+    document.getElementById("runtime-filter").classList.remove("visible");
     const profileEl = document.getElementById("profile");
     if (profileEl) { profileEl.innerHTML = ""; profileEl.classList.remove("visible"); }
 
@@ -1030,7 +1091,7 @@
       : `<div class="card-no-poster">${title}</div>`;
 
     return `
-      <div class="card" data-year="${film.year || 0}" data-slug="${film.slug}" data-genres="${(film.genres || []).join(',')}">
+      <div class="card" data-year="${film.year || 0}" data-slug="${film.slug}" data-genres="${(film.genres || []).join(',')}" data-runtime="${film.runtime || 0}">
         <div class="card-poster" onclick="openDetail(event,'${film.slug}',this)">
           ${img}
           ${rank != null ? `<div class="card-rank">#${rank}</div>` : ""}
@@ -1278,6 +1339,7 @@
     document.getElementById("results").innerHTML = html;
     buildDecadeFilter(data.recommendations);
     buildGenreFilter(data.recommendations);
+    buildRuntimeFilter(data.recommendations);
     document.getElementById("results").scrollIntoView({ behavior: "smooth", block: "start" });
   }
 </script>

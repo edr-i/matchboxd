@@ -234,6 +234,11 @@ def lb_logo_long():
     return FileResponse(os.path.join(os.path.dirname(__file__), "letterboxd_logo_long.svg"),
                         media_type="image/svg+xml")
 
+@app.get("/youtube_logo_long.png")
+def yt_logo_long():
+    return FileResponse(os.path.join(os.path.dirname(__file__), "youtube_logo_long.png"),
+                        media_type="image/png")
+
 
 @app.get("/providers/{slug}")
 def get_providers(slug: str, country: str = "US"):
@@ -259,13 +264,22 @@ def get_providers(slug: str, country: str = "US"):
         return {"country": country, "flatrate": [], "rent": [], "buy": []}
 
     try:
-        r = requests.get(
-            f"{TMDB_BASE}/movie/{tmdb_id}/watch/providers",
-            params={"api_key": TMDB_KEY},
-            timeout=8,
-        )
-        r.raise_for_status()
-        country_data = r.json().get("results", {}).get(country.upper(), {})
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            f_providers = pool.submit(
+                requests.get,
+                f"{TMDB_BASE}/movie/{tmdb_id}/watch/providers",
+                params={"api_key": TMDB_KEY}, timeout=8,
+            )
+            f_videos = pool.submit(
+                requests.get,
+                f"{TMDB_BASE}/movie/{tmdb_id}/videos",
+                params={"api_key": TMDB_KEY}, timeout=8,
+            )
+            r_prov = f_providers.result()
+            r_vid  = f_videos.result()
+
+        r_prov.raise_for_status()
+        country_data = r_prov.json().get("results", {}).get(country.upper(), {})
 
         def parse(entries):
             return [
@@ -274,14 +288,28 @@ def get_providers(slug: str, country: str = "US"):
                 for e in (entries or []) if e.get("logo_path")
             ]
 
+        trailer_url = None
+        try:
+            r_vid.raise_for_status()
+            videos = r_vid.json().get("results", [])
+            trailer = next(
+                (v for v in videos if v.get("type") == "Trailer" and v.get("site") == "YouTube"),
+                None,
+            )
+            if trailer:
+                trailer_url = f"https://www.youtube.com/watch?v={trailer['key']}"
+        except Exception:
+            pass
+
         return {
-            "country":  country.upper(),
-            "flatrate": parse(country_data.get("flatrate")),
-            "rent":     parse(country_data.get("rent")),
-            "buy":      parse(country_data.get("buy")),
+            "country":     country.upper(),
+            "flatrate":    parse(country_data.get("flatrate")),
+            "rent":        parse(country_data.get("rent")),
+            "buy":         parse(country_data.get("buy")),
+            "trailer_url": trailer_url,
         }
     except Exception:
-        return {"country": country, "flatrate": [], "rent": [], "buy": []}
+        return {"country": country, "flatrate": [], "rent": [], "buy": [], "trailer_url": None}
 
 
 _PROXY_ALLOWED_HOSTS = {"a.ltrbxd.com", "image.tmdb.org"}

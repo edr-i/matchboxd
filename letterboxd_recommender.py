@@ -685,6 +685,9 @@ def get_film_info(slug: str, meta_df: pd.DataFrame | None,
     year  = safe("year_released", 0)
     year  = int(float(year)) if year and str(year).strip() not in ("", "0") else 0
 
+    rt = safe("runtime", 0)
+    runtime = int(float(rt)) if rt and str(rt).strip() not in ("", "0", "nan") else 0
+
     return {
         "slug":       slug,
         "title":      title,
@@ -693,6 +696,7 @@ def get_film_info(slug: str, meta_df: pd.DataFrame | None,
         "poster_url": str(safe("poster_url")),
         "overview":   str(safe("overview")),
         "genres":     parse_genres(str(safe("genres", ""))),
+        "runtime":    runtime,
     }
 
 
