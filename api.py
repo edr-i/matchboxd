@@ -134,6 +134,11 @@ def health():
 def index():
     return FileResponse(os.path.join(os.path.dirname(__file__), "index.html"))
 
+@app.get("/letterboxd_logo_long.svg")
+def lb_logo_long():
+    return FileResponse(os.path.join(os.path.dirname(__file__), "letterboxd_logo_long.svg"),
+                        media_type="image/svg+xml")
+
 
 _PROXY_ALLOWED_HOSTS = {"a.ltrbxd.com", "image.tmdb.org"}
 

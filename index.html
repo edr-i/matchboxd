@@ -236,9 +236,62 @@
       border-bottom: var(--border);
       aspect-ratio: 2/3; overflow: hidden;
       position: relative; background: #ddd;
+      cursor: pointer;
     }
-    .card-poster a { display: block; width: 100%; height: 100%; }
     .card-poster img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+    /* ── CARD DETAIL PANEL ── */
+    .card-detail {
+      grid-column: 1 / -1;
+      border: var(--border); box-shadow: 4px 4px 0 var(--black);
+      background: var(--white);
+      position: relative; padding: 1rem 1.1rem 1.1rem;
+      margin-top: 0.25rem;
+    }
+    .card-detail-arrow {
+      position: absolute; top: -10px;
+      width: 0; height: 0;
+      border-left: 10px solid transparent;
+      border-right: 10px solid transparent;
+      border-bottom: 10px solid var(--black);
+      transform: translateX(-50%);
+      pointer-events: none;
+    }
+    .card-detail-arrow::after {
+      content: ""; position: absolute;
+      top: 3px; left: -7px;
+      width: 0; height: 0;
+      border-left: 7px solid transparent;
+      border-right: 7px solid transparent;
+      border-bottom: 7px solid var(--white);
+    }
+    .card-detail-header {
+      display: flex; align-items: baseline; gap: 0.5rem; flex-wrap: wrap;
+    }
+    .card-detail-title {
+      font-size: 1.25rem; font-weight: 700;
+      text-transform: uppercase; line-height: 1.15;
+    }
+    .card-detail-by {
+      font-family: 'Space Mono', monospace;
+      font-size: 0.6rem; color: #555; white-space: nowrap;
+    }
+    .card-detail-genres {
+      font-family: 'Space Mono', monospace;
+      font-size: 0.55rem; color: #888;
+      text-transform: uppercase; letter-spacing: 0.07em;
+      margin-top: 0.35rem;
+    }
+    .card-detail-overview {
+      font-size: 0.88rem; line-height: 1.65; color: #333;
+      margin-top: 0.6rem;
+    }
+    .card-detail-lb {
+      display: inline-block; margin-top: 0.8rem;
+      opacity: 0.65; transition: opacity 0.15s;
+    }
+    .card-detail-lb:hover { opacity: 1; }
+    .card-detail-lb img { height: 18px; width: auto; display: block; }
     .card-no-poster {
       width: 100%; height: 100%;
       display: flex; align-items: center; justify-content: center;
@@ -744,14 +797,67 @@
 
       const label = card.querySelector(".card-label");
       if (label) {
-        const lines = [];
         const genreMatches = cardGenres.filter(g => activeGenres.has(g));
-        if (activeGenres.size > 0 && genreMatches.length > 0) lines.push(genreMatches.join(" · "));
-        if (activeDecades.size > 0 && activeDecades.has(decade)) lines.push(decade + "s");
-        label.innerHTML = lines.join("<br>");
-        label.classList.toggle("visible", lines.length > 0);
+        const labelText = (activeGenres.size > 0 && genreMatches.length > 0) ? genreMatches.join(" · ") : "";
+        label.textContent = labelText;
+        label.classList.toggle("visible", labelText.length > 0);
       }
     });
+  }
+
+  let _detailSlug = null;
+  let _detailEl   = null;
+
+  function closeDetail() {
+    if (_detailEl) { _detailEl.remove(); _detailEl = null; }
+    _detailSlug = null;
+  }
+
+  function openDetail(e, slug, posterEl) {
+    if (_detailSlug === slug) { closeDetail(); return; }
+    closeDetail();
+
+    const film = (window.__filmMap || {})[slug];
+    if (!film) return;
+
+    const card = posterEl.closest('.card');
+    const grid = card.closest('.grid');
+    if (!grid) return;
+
+    const cardRect = card.getBoundingClientRect();
+    const gridRect = grid.getBoundingClientRect();
+
+    // Find last visible card in the same row
+    let lastInRow = card;
+    [...grid.querySelectorAll('.card:not(.card-detail):not(.filtered)')].forEach(c => {
+      const r = c.getBoundingClientRect();
+      if (Math.abs(r.top - cardRect.top) < 5 && r.right > lastInRow.getBoundingClientRect().right) {
+        lastInRow = c;
+      }
+    });
+
+    const arrowLeft = cardRect.left - gridRect.left + cardRect.width / 2;
+
+    const detail = document.createElement('div');
+    detail.className = 'card-detail';
+    const genres = (film.genres || []).join(' · ');
+    const lbUrl = `https://letterboxd.com/film/${film.slug}/`;
+
+    detail.innerHTML = `
+      <div class="card-detail-arrow" style="left:${arrowLeft}px"></div>
+      <div class="card-detail-header">
+        <div class="card-detail-title">${film.title}${film.year ? ` (${film.year})` : ''}</div>
+        ${film.director ? `<div class="card-detail-by">by ${film.director}</div>` : ''}
+      </div>
+      ${genres ? `<div class="card-detail-genres">${genres}</div>` : ''}
+      <p class="card-detail-overview">${film.overview || 'No overview available.'}</p>
+      <a href="${lbUrl}" target="_blank" rel="noopener noreferrer" class="card-detail-lb">
+        <img src="/letterboxd_logo_long.svg" alt="View on Letterboxd">
+      </a>`;
+
+    lastInRow.insertAdjacentElement('afterend', detail);
+    _detailSlug = slug;
+    _detailEl   = detail;
   }
 
   const PROG_MAP = [
@@ -792,6 +898,7 @@
     const isBlend = document.body.classList.contains("blend-mode");
     const mode    = document.getElementById("algo-mode").value;
 
+    closeDetail();
     document.getElementById("error").textContent = "";
     document.getElementById("results").innerHTML = "";
     document.getElementById("decade-filter").classList.remove("visible");
@@ -874,13 +981,11 @@
 
     return `
       <div class="card" data-year="${film.year || 0}" data-slug="${film.slug}" data-genres="${(film.genres || []).join(',')}">
-        <div class="card-poster">
-          <a href="${lbUrl}" target="_blank" rel="noopener noreferrer">
-            ${img}
-            ${rank != null ? `<div class="card-rank">#${rank}</div>` : ""}
-            <div class="card-label"></div>
-            ${wlHtml}
-          </a>
+        <div class="card-poster" onclick="openDetail(event,'${film.slug}',this)">
+          ${img}
+          ${rank != null ? `<div class="card-rank">#${rank}</div>` : ""}
+          <div class="card-label"></div>
+          ${wlHtml}
           ${film.because ? `<div class="card-because">${film.because}</div>` : ""}
         </div>
         <div class="card-body">
@@ -1100,6 +1205,9 @@
 
   function renderResults(data) {
     window.__exportData = data;
+    window.__filmMap = {};
+    data.recommendations.forEach(f => { window.__filmMap[f.slug] = f; });
+    (data.both_watchlist || []).forEach(f => { window.__filmMap[f.slug] = f; });
     const u1 = data.user1, u2 = data.user2;
     const isBlend = !!u2;
     const label = isBlend ? `${u1} + ${u2}` : u1;
