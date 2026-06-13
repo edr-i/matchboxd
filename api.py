@@ -38,6 +38,7 @@ from letterboxd_recommender import (
     get_film_info,
     make_display_name,
     build_user_profile,
+    compute_because_reasons,
 )
 
 app = FastAPI()
@@ -488,10 +489,31 @@ def recommend_stream(req: RecommendRequest):
             def enrich(slug):
                 return info_cache.get(slug, get_film_info(slug, meta_df))
 
+            # Compute "because you loved/liked X · you love Drama" reasons
+            rec_slugs_list = list(recs["movie_id"])
+            reasons1: dict = {}
+            reasons2: dict = {}
+            if req.mode in ("cf", "hybrid") and cf_scores:
+                reasons1 = compute_because_reasons(
+                    algo, ratings1, rec_slugs_list, meta_df,
+                    user_profile=profile1,
+                    username=req.user1 if is_blend else None,
+                )
+                if is_blend:
+                    reasons2 = compute_because_reasons(
+                        algo, ratings2, rec_slugs_list, meta_df,
+                        user_profile=profile2,
+                        username=req.user2,
+                    )
+
             results = []
             for _, row in recs.iterrows():
                 slug = row["movie_id"]
                 info = enrich(slug)
+                b1 = reasons1.get(slug)
+                b2 = reasons2.get(slug) if is_blend else None
+                parts = [p for p in [b1, b2] if p]
+                because = " · ".join(parts) if parts else None
                 results.append({
                     "slug":          slug,
                     "title":         info["title"],
@@ -507,6 +529,7 @@ def recommend_stream(req: RecommendRequest):
                     "in_wl1":        slug in watchlist1,
                     "in_wl2":        slug in watchlist2 if is_blend else False,
                     "genres":        info.get("genres", []),
+                    "because":       because,
                 })
 
             both_wl = []

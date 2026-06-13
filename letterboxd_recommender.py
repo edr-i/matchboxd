@@ -768,6 +768,88 @@ def build_user_profile(ratings: list[dict], meta_df: pd.DataFrame,
     }
 
 
+def compute_because_reasons(algo, user_ratings: list[dict], rec_slugs: list[str],
+                            meta_df=None, user_profile: dict = None,
+                            username: str = None,
+                            min_cf_similarity: float = 0.45) -> dict[str, str | None]:
+    """
+    For each rec slug, build a 'because' string combining:
+    - CF embedding similarity: "<name> loved/liked <film>"
+    - Genre affinity:          "<name> love <genre>"
+    Up to two signals are combined with " · ".
+    """
+    pronoun = username if username else "you"
+    r2i = algo.trainset._raw2inner_id_items
+    rating_map = {r["movie_id"]: r["rating_val"] for r in user_ratings}
+
+    # films rated 3.5★+ that are in the CF trainset
+    candidates = [(mid, rv) for mid, rv in rating_map.items() if rv >= 7 and mid in r2i]
+    if not candidates:
+        candidates = sorted(
+            [(mid, rv) for mid, rv in rating_map.items() if mid in r2i],
+            key=lambda x: -x[1],
+        )[:30]
+    if not candidates:
+        return {s: None for s in rec_slugs}
+
+    cand_vecs = []
+    for slug, rating in candidates:
+        vec = algo.qi[r2i[slug]]
+        n = float(np.linalg.norm(vec))
+        if n > 1e-9:
+            cand_vecs.append((slug, rating, vec / n))
+
+    # title lookup for candidate films
+    title_map: dict[str, str] = {}
+    if meta_df is not None:
+        sub = meta_df[meta_df["movie_id"].isin({s for s, _, _ in cand_vecs})]
+        for _, row in sub.iterrows():
+            t = row.get("movie_title", "")
+            if t and not pd.isna(t):
+                title_map[str(row["movie_id"])] = str(t).strip()
+
+    # user's top genres (top 3 from profile)
+    top_genres: list[str] = (user_profile or {}).get("top_genres", [])[:3]
+
+    # genre lookup for rec films
+    rec_genre_map: dict[str, list[str]] = {}
+    if meta_df is not None and top_genres:
+        sub_rec = meta_df[meta_df["movie_id"].isin(set(rec_slugs))]
+        for _, row in sub_rec.iterrows():
+            rec_genre_map[str(row["movie_id"])] = parse_genres(str(row.get("genres", "")))
+
+    def verb(rv: int) -> str:
+        return "loved" if rv >= 9 else "liked"
+
+    reasons: dict[str, str | None] = {}
+    for rec_slug in rec_slugs:
+        parts: list[str] = []
+
+        # ── CF signal ──────────────────────────────────────────────────
+        if rec_slug in r2i and cand_vecs:
+            rec_vec = algo.qi[r2i[rec_slug]]
+            rec_n = float(np.linalg.norm(rec_vec))
+            if rec_n > 1e-9:
+                rec_norm = rec_vec / rec_n
+                best_sim, best_slug, best_rv = max(
+                    ((float(np.dot(rec_norm, v)), s, r) for s, r, v in cand_vecs),
+                    key=lambda x: x[0],
+                )
+                if best_sim >= min_cf_similarity:
+                    title = title_map.get(best_slug) or best_slug.replace("-", " ").title()
+                    parts.append(f"{pronoun} {verb(best_rv)} <i>{title}</i>")
+
+        # ── genre signal ───────────────────────────────────────────────
+        if top_genres:
+            rec_genres = set(rec_genre_map.get(rec_slug, []))
+            matched = next((g for g in top_genres if g in rec_genres), None)
+            if matched:
+                parts.append(f"{pronoun} love {matched}")
+
+        reasons[rec_slug] = " and ".join(parts) if parts else None
+    return reasons
+
+
 def make_display_name(slug: str, meta_df: pd.DataFrame | None,
                       api_key: str | None = None) -> str:
     info = get_film_info(slug, meta_df, api_key)
