@@ -43,6 +43,28 @@ from letterboxd_recommender import (
     compute_because_reasons,
 )
 
+# Inject proxy into letterboxdpy's curl_cffi session (the actual HTTP client it uses)
+_PROXY_URL = os.environ.get("PROXY_URL", "")
+if _PROXY_URL:
+    try:
+        from curl_cffi import requests as _cffi_requests
+        from letterboxdpy.core.scraper import Scraper as _Scraper
+
+        class _ProxiedSession(_cffi_requests.Session):
+            """Strip impersonate from requests — Chrome TLS fingerprint is incompatible with Bright Data MITM."""
+            def request(self, method, url, **kwargs):
+                kwargs.pop("impersonate", None)
+                return super().request(method, url, **kwargs)
+
+        _lb_session = _ProxiedSession(
+            proxies={"http": _PROXY_URL, "https": _PROXY_URL},
+            verify=False,
+        )
+        _Scraper.set_instance(_lb_session)
+        print("letterboxdpy proxy session injected ✓")
+    except Exception as _e:
+        print(f"Warning: could not inject proxy into letterboxdpy: {_e}")
+
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
@@ -57,7 +79,7 @@ TMDB_KEY        = os.environ.get("TMDB_KEY", "")
 TMDB_BASE       = "https://api.themoviedb.org/3"
 if not TMDB_KEY:
     print("⚠  TMDB_KEY not set — recent film metadata will be limited")
-COMMUNITY_CACHE = ".cache_community.pkl"
+COMMUNITY_CACHE = os.environ.get("COMMUNITY_CACHE", "/app/data/.cache_community.pkl")
 SAMPLE_SIZE     = int(os.environ.get("SAMPLE_SIZE", 11_000_000))
 MIN_RATINGS     = int(os.environ.get("MIN_RATINGS", 200))
 
@@ -95,11 +117,22 @@ def get_community_algo():
     global _community_algo
     with _state_lock:
         if _community_algo is None:
-            _startup_status["message"] = "Loading community ratings (this takes a minute)..."
-            print("Loading community ratings...")
-            community_df    = load_community_ratings(DATA_PATH, SAMPLE_SIZE, MIN_RATINGS)
-            _startup_status["message"] = "Training SVD model..."
-            _community_algo = train_community_model(community_df, COMMUNITY_CACHE, no_cache=False)
+            if not DATA_PATH or not os.path.exists(DATA_PATH):
+                # Pre-trained cache mode (HF Spaces / no CSV): load model directly
+                _startup_status["message"] = "Loading pre-trained model..."
+                print("Loading pre-trained community model from cache...")
+                if not os.path.exists(COMMUNITY_CACHE):
+                    raise RuntimeError(f"No ratings CSV configured and no cache found at {COMMUNITY_CACHE}")
+                with open(COMMUNITY_CACHE, "rb") as f:
+                    cached = pickle.load(f)
+                _community_algo = cached["algo"]
+                print("Pre-trained model loaded ✓")
+            else:
+                _startup_status["message"] = "Loading community ratings (this takes a minute)..."
+                print("Loading community ratings...")
+                community_df    = load_community_ratings(DATA_PATH, SAMPLE_SIZE, MIN_RATINGS)
+                _startup_status["message"] = "Training SVD model..."
+                _community_algo = train_community_model(community_df, COMMUNITY_CACHE, no_cache=False)
         return _community_algo
 
 
@@ -122,8 +155,45 @@ class RecommendRequest(BaseModel):
     min_runtime: int       = 40
 
 
+HF_DATASET_REPO = os.environ.get("HF_DATASET_REPO", "drrucki/matchboxd-data")
+
+
+def _ensure_data_files():
+    """Download data files from HF dataset if not already present (HF Spaces mode)."""
+    hf_token = os.environ.get("HF_TOKEN", "")
+    files_needed = [
+        (MOVIE_DATA_PATH, "movie_data.csv"),
+        (COMMUNITY_CACHE,  ".cache_community.pkl"),
+    ]
+    missing = [(local, remote) for local, remote in files_needed
+               if local and not os.path.exists(local)]
+    if not missing:
+        return
+    try:
+        from huggingface_hub import hf_hub_download
+        data_dir = "/app/data"
+        os.makedirs(data_dir, exist_ok=True)
+        for local_path, filename in missing:
+            print(f"Downloading {filename} from HF dataset...")
+            _startup_status["message"] = f"Downloading {filename}..."
+            downloaded = hf_hub_download(
+                repo_id=HF_DATASET_REPO,
+                filename=filename,
+                repo_type="dataset",
+                token=hf_token or None,
+                local_dir=data_dir,
+            )
+            # rename if the dataset filename differs from local_path basename
+            if os.path.abspath(downloaded) != os.path.abspath(local_path):
+                os.replace(downloaded, local_path)
+            print(f"  {os.path.basename(local_path)} ready ✓")
+    except Exception as e:
+        print(f"Warning: could not download data files: {e}")
+
+
 def _run_startup():
     try:
+        _ensure_data_files()
         get_community_algo()
         get_meta_df()
         _startup_status["message"] = "Ready"

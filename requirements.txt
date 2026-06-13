@@ -4,6 +4,7 @@ scikit-learn
 pandas
 numpy
 requests
+cloudscraper
 fastapi
 uvicorn[standard]
 python-dotenv
