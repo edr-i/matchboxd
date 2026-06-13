@@ -165,13 +165,13 @@
 
     /* ── REQUEST PROGRESS ── */
     #req-progress {
-      display: none; align-items: center; gap: 1rem;
+      display: none; flex-direction: column; gap: 0.5rem;
       margin-bottom: 1.5rem; width: 100%;
       border: var(--border); padding: 0.75rem 1rem;
     }
     #req-progress.visible { display: flex; }
-    .prog-wrap-sm { width: 60px; height: 3px; background: #ddd; overflow: hidden; flex-shrink: 0; }
-    .prog-inner-sm { height: 100%; background: var(--accent); animation: indeterminate 1.2s infinite; }
+    .prog-wrap-sm { width: 100%; height: 3px; background: #ddd; overflow: hidden; }
+    .prog-inner-sm { height: 100%; width: 0%; background: var(--accent); transition: width 0.5s ease; }
     body.blend-mode .prog-inner-sm { background: var(--green); }
     #req-step {
       font-family: 'Space Mono', monospace;
@@ -754,6 +754,38 @@
     });
   }
 
+  const PROG_MAP = [
+    { key: "Fetching Letterboxd data for", pct: 12 },
+    { key: "Fetching Letterboxd data for", pct: 24 },
+    { key: "Calculating taste",            pct: 44 },
+    { key: "Fetching metadata",            pct: 54 },
+    { key: "Building content",             pct: 63 },
+    { key: "Scoring",                      pct: 76 },
+    { key: "Ranking",                      pct: 88 },
+    { key: "Fetching posters",             pct: 94 },
+  ];
+  let _progIdx = 0;
+
+  function setProgressBar(pct) {
+    const bar = document.querySelector(".prog-inner-sm");
+    if (bar) bar.style.width = pct + "%";
+  }
+
+  function advanceProgress(msg) {
+    while (_progIdx < PROG_MAP.length && msg.includes(PROG_MAP[_progIdx].key)) {
+      setProgressBar(PROG_MAP[_progIdx].pct);
+      _progIdx++;
+      return;
+    }
+    for (let i = _progIdx; i < PROG_MAP.length; i++) {
+      if (msg.includes(PROG_MAP[i].key)) {
+        setProgressBar(PROG_MAP[i].pct);
+        _progIdx = i + 1;
+        return;
+      }
+    }
+  }
+
   async function getRecommendations() {
     const user1   = document.getElementById("user1").value.trim();
     const user2   = document.getElementById("user2").value.trim();
@@ -773,6 +805,8 @@
     const progress = document.getElementById("req-progress");
     progress.classList.add("visible");
     document.getElementById("req-step").textContent = "Starting…";
+    _progIdx = 0;
+    setProgressBar(3);
 
     const body = { user1, user2: isBlend ? user2 : null, mode, top: 50, decades: null };
 
@@ -796,10 +830,17 @@
         for (const line of lines) {
           if (!line.startsWith("data: ")) continue;
           const p = JSON.parse(line.slice(6));
-          if      (p.type === "progress") document.getElementById("req-step").textContent = p.message;
-          else if (p.type === "profile")  renderProfile(p.data);
-          else if (p.type === "result")   result = p.data;
-          else if (p.type === "error")    throw new Error(p.message);
+          if (p.type === "progress") {
+            document.getElementById("req-step").textContent = p.message;
+            advanceProgress(p.message);
+          } else if (p.type === "profile") {
+            renderProfile(p.data);
+          } else if (p.type === "result") {
+            setProgressBar(100);
+            result = p.data;
+          } else if (p.type === "error") {
+            throw new Error(p.message);
+          }
         }
       }
       progress.classList.remove("visible");
