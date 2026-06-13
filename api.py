@@ -4,6 +4,8 @@ import pickle
 import threading
 import queue
 import json
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import asynccontextmanager
 
 try:
@@ -65,6 +67,28 @@ _community_algo  = None
 _meta_df         = None
 _startup_done    = threading.Event()
 _startup_status  = {"step": "starting", "message": "Initializing..."}
+
+_user_cache      = {}
+_user_cache_lock = threading.Lock()
+USER_CACHE_TTL   = 600  # seconds
+
+
+def get_cached_user_data(username: str):
+    """Fetch ratings/watchlist/favorites from Letterboxd, caching results for USER_CACHE_TTL seconds."""
+    now = time.time()
+    with _user_cache_lock:
+        entry = _user_cache.get(username)
+        if entry and now - entry["ts"] < USER_CACHE_TTL:
+            return entry["ratings"], entry["watchlist"], entry["favs"]
+
+    ratings, watchlist, favs = fetch_user_data(username, include_favorites=True)
+
+    with _user_cache_lock:
+        _user_cache[username] = {
+            "ratings": ratings, "watchlist": watchlist,
+            "favs": favs, "ts": time.time(),
+        }
+    return ratings, watchlist, favs
 
 
 def get_community_algo():
@@ -282,8 +306,6 @@ def recommend(req: RecommendRequest):
     all_slugs     = list(dict.fromkeys(result_slugs + wl_slugs))  # deduped, ordered
 
     # Fetch poster + director concurrently for all slugs
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    import threading
 
     info_cache = {}
     lock       = threading.Lock()
@@ -414,20 +436,26 @@ def recommend_stream(req: RecommendRequest):
         try:
             is_blend = req.user2 is not None and req.user2.strip() != ""
 
+            # Emit progress for each user, then fetch both in parallel
             yield from emit(f"Fetching Letterboxd data for {req.user1}…")
-            try:
-                ratings1, watchlist1, favs1 = fetch_user_data(req.user1, include_favorites=True)
-            except Exception as e:
-                yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
-                return
-
             if is_blend:
                 yield from emit(f"Fetching Letterboxd data for {req.user2}…")
-                try:
-                    ratings2, watchlist2, favs2 = fetch_user_data(req.user2, include_favorites=True)
-                except Exception as e:
-                    yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
-                    return
+
+            users_to_fetch = [req.user1] + ([req.user2] if is_blend else [])
+            fetch_results  = {}
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                futs = {pool.submit(get_cached_user_data, u): u for u in users_to_fetch}
+                for fut in as_completed(futs):
+                    u = futs[fut]
+                    try:
+                        fetch_results[u] = fut.result()
+                    except Exception as e:
+                        yield f"data: {json.dumps({'type': 'error', 'message': f'Could not fetch user {u!r}: {str(e)}'})}\n\n"
+                        return
+
+            ratings1, watchlist1, favs1 = fetch_results[req.user1]
+            if is_blend:
+                ratings2, watchlist2, favs2 = fetch_results[req.user2]
                 watchlist      = watchlist1 | watchlist2
                 watchlist_both = watchlist1 & watchlist2
                 merged_ratings = merge_user_ratings(ratings1, ratings2, req.user1, req.user2)
@@ -442,18 +470,21 @@ def recommend_stream(req: RecommendRequest):
             algo    = get_community_algo()
             meta_df = get_meta_df()
 
+            def enrich_one_fav(f):
+                info = get_film_info(f["slug"], meta_df, api_key=None)
+                poster = info.get("poster_url", "")
+                if not poster and TMDB_KEY:
+                    from letterboxd_recommender import _tmdb_fetch_one
+                    fetched = _tmdb_fetch_one(f["slug"], TMDB_KEY)
+                    if fetched:
+                        poster = fetched.get("poster_url", "")
+                return {**f, "poster_url": poster}
+
             def enrich_favs(favs):
-                enriched = []
-                for f in favs:
-                    info = get_film_info(f["slug"], meta_df, api_key=None)
-                    poster = info.get("poster_url", "")
-                    if not poster and TMDB_KEY:
-                        from letterboxd_recommender import _tmdb_fetch_one
-                        fetched = _tmdb_fetch_one(f["slug"], TMDB_KEY)
-                        if fetched:
-                            poster = fetched.get("poster_url", "")
-                    enriched.append({**f, "poster_url": poster})
-                return enriched
+                if not favs:
+                    return []
+                with ThreadPoolExecutor(max_workers=min(len(favs), 8)) as pool:
+                    return list(pool.map(enrich_one_fav, favs))
 
             profile1 = build_user_profile(ratings1, meta_df, watchlist_size=len(watchlist1))
             profile1["favorites"] = enrich_favs(favs1)
@@ -534,7 +565,6 @@ def recommend_stream(req: RecommendRequest):
                 with lock:
                     info_cache[slug] = info
 
-            from concurrent.futures import ThreadPoolExecutor, as_completed
             with ThreadPoolExecutor(max_workers=20) as pool:
                 futures = [pool.submit(fetch_info, s) for s in all_slugs]
                 for f in as_completed(futures):
@@ -650,6 +680,7 @@ def pdf_page(user1: str, mode: str, user2: str = None):
   .card-rank {{ position: absolute; top: 0; left: 0; font-size: 0.7rem; font-weight: 700; background: var(--black); color: var(--white); padding: 1px 4px; line-height: 1.4; }}
   .wl-badge {{ position: absolute; top: 0; right: 0; font-family: 'Space Mono', monospace; font-size: 0.42rem; font-weight: 700; padding: 1px 4px; text-transform: uppercase; background: var(--accent); color: {'#0a0a0a' if is_blend else '#fff'}; line-height: 1.4; }}
   .wl-green {{ background: #00e054; color: #0a0a0a; }}
+  .wl-orange {{ background: #ff8000; color: #fff; }}
   .card-body {{ padding: 0.3rem 0; }}
   .card-title {{ font-size: 0.75rem; font-weight: 700; text-transform: uppercase; line-height: 1.2; }}
   .card-meta {{ font-family: 'Space Mono', monospace; font-size: 0.5rem; color: #555; margin-top: 0.1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
@@ -695,9 +726,9 @@ async function load() {{
     const img   = f.poster_url ? '<img src="' + f.poster_url + '">' : '<div class="card-no-poster">' + title + '</div>';
     let wl = '';
     if (isBlend) {{
-      if (f.in_both_wl || (f.in_wl1 && f.in_wl2)) wl = '<div class="wl-badge wl-green">WL: ' + u1 + ' & ' + u2 + '</div>';
-      else if (f.in_wl1) wl = '<div class="wl-badge">WL: ' + u1 + '</div>';
-      else if (f.in_wl2) wl = '<div class="wl-badge">WL: ' + u2 + '</div>';
+      if (f.in_both_wl || (f.in_wl1 && f.in_wl2)) wl = '<div class="wl-badge wl-green">BOTH WL</div>';
+      else if (f.in_wl1) wl = '<div class="wl-badge wl-green">WL: ' + u1 + '</div>';
+      else if (f.in_wl2) wl = '<div class="wl-badge wl-green">WL: ' + u2 + '</div>';
     }} else if (f.in_watchlist || f.in_wl1) {{
       wl = '<div class="wl-badge">WL</div>';
     }}

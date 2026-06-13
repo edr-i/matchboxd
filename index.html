@@ -1018,7 +1018,7 @@
     let wlHtml = "";
     if (isBlend) {
       const both = film.in_both_wl || (film.in_wl1 && film.in_wl2);
-      if (both)          wlHtml = `<div class="wl-badge wl-green">WL: ${user1} &amp; ${user2}</div>`;
+      if (both)          wlHtml = `<div class="wl-badge wl-green">BOTH WL</div>`;
       else if (film.in_wl1) wlHtml = `<div class="wl-badge wl-green">WL: ${user1}</div>`;
       else if (film.in_wl2) wlHtml = `<div class="wl-badge wl-green">WL: ${user2}</div>`;
     } else {
@@ -1084,7 +1084,7 @@
       let wl = '';
       if (isBlend) {
         const both = f.in_both_wl || (f.in_wl1 && f.in_wl2);
-        if (both)          wl = `<div class="export-wl export-wl-green">WL: ${u1} &amp; ${u2}</div>`;
+        if (both)          wl = `<div class="export-wl export-wl-green">BOTH WL</div>`;
         else if (f.in_wl1) wl = `<div class="export-wl export-wl-green">WL: ${u1}</div>`;
         else if (f.in_wl2) wl = `<div class="export-wl export-wl-green">WL: ${u2}</div>`;
       } else if (f.in_watchlist || f.in_wl1) {
