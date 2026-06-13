@@ -703,7 +703,9 @@
 <div id="export-overlay"></div>
 
 <script>
-  const API = "";
+  const API = (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")
+    ? ""
+    : "https://drrucki-matchboxd.hf.space";
   let activeDecades = new Set();
   let activeGenres  = new Set();
 
